@@ -4,10 +4,12 @@
 #include "app_usbmodbusmaster.h"
 #include "app_usbmodbusslave.h"
 #include "app_usbgather.h"
-#include "bsp_led.h"
-#include "app_encryption.h"
 
+
+
+#define ControlVersion  2
 struct _USBCOM_Backend 	USBCOM_Backend;
+u16 HaveheadtimeMS = 0;
 
 //汇报控制器信息给上位机
 void  App_ReportControlInfo(u8* chardata,int len)
@@ -41,31 +43,37 @@ void  App_ReportControlInfo(u8* chardata,int len)
 		if(Flag == 1)
 		{
 			//modbus组帧，正确包应答方式
-			SendData[0] = 0x71;
+			SendData[0] = 0x73;
 
-			SendData[1] = (unsigned char)(App_Encryption.Device_Serial0 >> 24);
-			SendData[2] = (unsigned char)(App_Encryption.Device_Serial0 >> 16);
-			SendData[3] = (unsigned char)(App_Encryption.Device_Serial0 >> 8);
-			SendData[4] = (unsigned char)(App_Encryption.Device_Serial0 >> 0);
+			//读控制器信息，含ProductID,ComID,CPUUsage,ControlVersion
 
-			SendData[5] = (unsigned char)(App_Encryption.Device_Serial1 >> 24);
-			SendData[6] = (unsigned char)(App_Encryption.Device_Serial1 >> 16);
-			SendData[7] = (unsigned char)(App_Encryption.Device_Serial1 >> 8);
-			SendData[8] = (unsigned char)(App_Encryption.Device_Serial1 >> 0);
+			//ProductID
+			//SendData[1] = (unsigned char)(App_Encryption.Device_Serial2 >> 24);
+			//SendData[2] = (unsigned char)(App_Encryption.Device_Serial2 >> 16);
+			//SendData[3] = (unsigned char)(App_Encryption.Device_Serial2 >> 8);
+			//SendData[4] = (unsigned char)(App_Encryption.Device_Serial2 >> 0);
 
-			SendData[9] = (unsigned char)(App_Encryption.Device_Serial2 >> 24);
-			SendData[10] = (unsigned char)(App_Encryption.Device_Serial2 >> 16);
-			SendData[11] = (unsigned char)(App_Encryption.Device_Serial2 >> 8);
-			SendData[12] = (unsigned char)(App_Encryption.Device_Serial2 >> 0);
+			//ComID
+			SendData[5] = (unsigned char)(MODBUSID >> 8);
+			SendData[6] = (unsigned char)(MODBUSID >> 0);
 			
-			SendData[13] = LRC(SendData,13);
+			//CPUUsage%
+			SendData[7] = 0;
+			SendData[8] = OSCPUUsage;
+
+			//ControlVersion
+			SendData[9] = (unsigned char)(ControlVersion >> 8);
+			SendData[10] = (unsigned char)(ControlVersion >> 0);
+			
+			SendData[11] = LRC(SendData,11);
+
 			//写数据
-			USBCOM_Write(SendData,14);
+			USBCOM_Write(SendData,12);
 		}
 		else
 		{
 			//modbus组帧，故障包应答方式
-			SendData[0] = 0x71|0x80;
+			SendData[0] = 0x73|0x80;
 			SendData[1] = LRC(SendData,1);
 			//写数据
 			USBCOM_Write(SendData,2);
@@ -241,6 +249,7 @@ void USBCOM_Close(void)
 void USBCOM_Run(void *p_arg)
 {
 
+
     USBCOM_Init();
 	USBCOM_Open();
     while(1)
@@ -316,7 +325,6 @@ void USBCOM_Run(void *p_arg)
 						//头
 						if(USBCOM_Backend.buff[index] == ':')
 						{
-							COMMLedOn
 							USBCOM_Backend.framestate = 1;
 							USBCOM_Backend.frameheadindex = index;
 						}
@@ -333,7 +341,6 @@ void USBCOM_Run(void *p_arg)
 	
 							//转换结果长度
 							int charlen = 0;
-							COMMLedOff;
 	 
 							//ascii转换为char
 							ascii2char(chardata,USBCOM_Backend.buff + USBCOM_Backend.frameheadindex+1 ,index - USBCOM_Backend.frameheadindex-1);
@@ -359,12 +366,12 @@ void USBCOM_Run(void *p_arg)
 
 								//读CPUID
 							case 0x71:
-								App_Encryption_ReportID(chardata,charlen);
+								//App_Encryption_ReportID(chardata,charlen);
 								break;
 
 								//写加密串
 							case 0x72:
-								App_Encryption_WriteEncry(chardata,charlen);
+								//App_Encryption_WriteEncry(chardata,charlen);
 								break;
 
 								//读控制器信息，含ProductID,ComID,CPUUsage,ControlVersion

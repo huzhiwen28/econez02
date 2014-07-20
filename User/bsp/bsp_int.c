@@ -411,10 +411,10 @@ void  BSP_IntHandlerTIM1_UP       (void)  { BSP_IntHandler(BSP_INT_ID_TIM1_UP); 
 void  BSP_IntHandlerTIM1_TRG_COM  (void)  { BSP_IntHandler(BSP_INT_ID_TIM1_TRG_COM);    }
 void  BSP_IntHandlerTIM1_CC       (void)  { BSP_IntHandler(BSP_INT_ID_TIM1_CC);         }
 void  BSP_IntHandlerTIM2          (void)  { BSP_IntHandler(BSP_INT_ID_TIM2);            }
-//void  BSP_IntHandlerTIM3          (void)  { BSP_IntHandler(BSP_INT_ID_TIM3);            }
-void  BSP_IntHandlerTIM3          (void)  { TIM3_IRQHandler();            }
-//void  BSP_IntHandlerTIM4          (void)  { BSP_IntHandler(BSP_INT_ID_TIM4);            }
-void  BSP_IntHandlerTIM4          (void)  { TIM4_IRQHandler();            }
+void  BSP_IntHandlerTIM3          (void)  { BSP_IntHandler(BSP_INT_ID_TIM3);            }
+//void  BSP_IntHandlerTIM3          (void)  { TIM3_IRQHandler();            }
+void  BSP_IntHandlerTIM4          (void)  { BSP_IntHandler(BSP_INT_ID_TIM4);            }
+//void  BSP_IntHandlerTIM4          (void)  { TIM4_IRQHandler();            }
 void  BSP_IntHandlerI2C1_EV       (void)  { BSP_IntHandler(BSP_INT_ID_I2C1_EV);         }
 void  BSP_IntHandlerI2C1_ER       (void)  { BSP_IntHandler(BSP_INT_ID_I2C1_ER);         }
 void  BSP_IntHandlerI2C2_EV       (void)  { BSP_IntHandler(BSP_INT_ID_I2C2_EV);         }
@@ -435,8 +435,8 @@ void  BSP_IntHandlerTIM8_CC       (void)  { BSP_IntHandler(BSP_INT_ID_TIM8_CC); 
 void  BSP_IntHandlerADC3          (void)  { BSP_IntHandler(BSP_INT_ID_ADC3);            }
 void  BSP_IntHandlerFSMC          (void)  { BSP_IntHandler(BSP_INT_ID_FSMC);            }
 void  BSP_IntHandlerSDIO          (void)  { BSP_IntHandler(BSP_INT_ID_SDIO);            }
-//void  BSP_IntHandlerTIM5          (void)  { BSP_IntHandler(BSP_INT_ID_TIM5);            }
-void  BSP_IntHandlerTIM5          (void)  { TIM5_IRQHandler();            				}
+void  BSP_IntHandlerTIM5          (void)  { BSP_IntHandler(BSP_INT_ID_TIM5);            }
+//void  BSP_IntHandlerTIM5          (void)  { TIM5_IRQHandler();            				}
 void  BSP_IntHandlerSPI3          (void)  { BSP_IntHandler(BSP_INT_ID_SPI3);            }
 void  BSP_IntHandlerUART4         (void)  { BSP_IntHandler(BSP_INT_ID_UART4);           }
 void  BSP_IntHandlerUART5         (void)  { BSP_IntHandler(BSP_INT_ID_UART5);           }

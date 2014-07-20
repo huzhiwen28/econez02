@@ -37,9 +37,9 @@ void  BSP_Init (void)
 {
 	SystemInit();
 	
-	bsp_InitLed();		/* 初始化LED的GPIO */
-	bsp_InitButton();	/* 初始化按键的GPIO */
-	bsp_InitUart();		/* 初始化串口 */
+	//bsp_InitLed();		/* 初始化LED的GPIO */
+	//bsp_InitButton();	/* 初始化按键的GPIO */
+	//bsp_InitUart();		/* 初始化串口 */
 	
 	/* 
 		初始化 uC/OS-II 滴答中断。配置systic中断周期为10ms (OS_TICKS_PER_SEC = 100时)。

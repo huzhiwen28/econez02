@@ -31,10 +31,10 @@
 typedef enum {FALSE = 0, TRUE = !FALSE} bool;
 #define EVAL_COM1                        USART1
 
-  #define USB_DISCONNECT                      GPIOG  
-  #define USB_DISCONNECT_PIN                  GPIO_Pin_6
-  #define RCC_APB2Periph_GPIO_DISCONNECT      RCC_APB2Periph_GPIOG
-  #define EVAL_COM1_IRQn                      USART1_IRQn
+#define USB_DISCONNECT                      GPIOA  
+#define USB_DISCONNECT_PIN                  GPIO_Pin_15
+#define RCC_APB2Periph_GPIO_DISCONNECT      RCC_APB2Periph_GPIOA
+#define EVAL_COM1_IRQn                      USART1_IRQn
 
 /* Exported functions ------------------------------------------------------- */
 void Set_System(void);

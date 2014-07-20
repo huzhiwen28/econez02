@@ -127,9 +127,10 @@ void Set_System(void)
   /* Configure USB pull-up pin */
   GPIO_InitStructure.GPIO_Pin = USB_DISCONNECT_PIN;
   GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
-  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_OD;
+  //GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_OD;//冰凌科技方法
+  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
   GPIO_Init(USB_DISCONNECT, &GPIO_InitStructure);
-
+  GPIO_ResetBits(USB_DISCONNECT,USB_DISCONNECT_PIN);
 }
 
 /*******************************************************************************
@@ -217,10 +218,10 @@ void USB_Interrupts_Config(void)
 #endif /* STM32F10X_CL */
 
   /* Enable USART Interrupt */
-  NVIC_InitStructure.NVIC_IRQChannel = EVAL_COM1_IRQn;
-  NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 1;
-  NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;
-  NVIC_Init(&NVIC_InitStructure);
+  //NVIC_InitStructure.NVIC_IRQChannel = EVAL_COM1_IRQn;
+  //NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 1;
+  //NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;
+  //NVIC_Init(&NVIC_InitStructure);
 }
 
 /*******************************************************************************
@@ -241,13 +242,16 @@ void USB_Cable_Config (FunctionalState NewState)
     USB_DevDisconnect();
   }
 #else /* USE_STM3210B_EVAL or USE_STM3210E_EVAL */
+	//和冰凌科技相反
   if (NewState != DISABLE)
   {
     GPIO_SetBits(USB_DISCONNECT, USB_DISCONNECT_PIN);
+    //GPIO_ResetBits(USB_DISCONNECT, USB_DISCONNECT_PIN);
   }
   else
   {
     GPIO_ResetBits(USB_DISCONNECT, USB_DISCONNECT_PIN);
+    //GPIO_SetBits(USB_DISCONNECT, USB_DISCONNECT_PIN);
   }
 #endif /* USE_STM3210C_EVAL */
 }

@@ -13,6 +13,7 @@
 #include "bsp_enc.h"
 #include "bsp_adc.h"
 #include "bsp_TimesInt.h"
+#include "bsp_extsram.h"
 #include "app_kernelregs.h"
 #include "app_usbcom.h"
 #include "app_backend.h"
@@ -27,6 +28,7 @@
 #include "app_pid.h"
 #include "app_Port.h"
 #include "app_encryption.h"
+#include <math.h>
 
 /*
 *********************************************************************************************************
@@ -39,16 +41,9 @@ static OS_STK AppTaskStartStk[APP_TASK_START_STK_SIZE];
 static OS_STK AppTask232CStk[APP_TASK_232C_STK_SIZE];
 static OS_STK AppTaskUSBCOMStk[APP_TASK_USBCOM_STK_SIZE];
 static OS_STK AppTaskUSBGatherStk[APP_TASK_USBGATHER_STK_SIZE];
-static OS_STK AppTaskFlushParaStk[APP_TASK_FLUSHPARA_STK_SIZE];
 static OS_STK AppTaskHeartBeatStk[APP_TASK_HEARTBEAT_STK_SIZE];
-static OS_STK AppTaskRegsStk[APP_TASK_REGS_STK_SIZE];
-static OS_STK AppTask485COMStk[APP_TASK_485COM_STK_SIZE];
-static OS_STK AppTaskSonicStk[APP_TASK_SONIC_STK_SIZE];
-static OS_STK AppTaskENCStk[APP_TASK_ENC_STK_SIZE];
-static OS_STK AppTaskDACStk[APP_TASK_DAC_STK_SIZE];
-static OS_STK AppTaskTIM4Stk[APP_TASK_TIM4_STK_SIZE];
-static OS_STK AppTaskPIDStk[APP_TASK_PID_STK_SIZE];
-
+static OS_STK AppTaskServotimerStk[APP_TASK_SERVOTIMER_STK_SIZE];
+static OS_STK AppTaskServoStk[APP_TASK_SERVO_STK_SIZE];
 
 /*
 *********************************************************************************************************
@@ -59,9 +54,783 @@ static OS_STK AppTaskPIDStk[APP_TASK_PID_STK_SIZE];
 static void AppTaskCreate(void);
 static void AppTaskStart(void *p_arg);
 static void AppTask232C(void *p_arg);
-static void PIDRun(void *p_arg);
 
 void printint(int num);
+u32 myplusecnt = 0;
+
+OS_EVENT *Servotimermsg; //伺服周期通知
+
+double beginspeed = 0.0;
+
+struct tptp{
+	u8 ptptype;//0 无 1 5段	2 4段 3 7段 4 6段
+	double t0,t1,t2,t3,t4,t5,t6,tv;
+	double ahis,vhis,acur,vcur;
+	double J,V,S;
+	int Ta,Ts;
+};
+
+struct tjog{
+	u8 jogtype;//0 无 1 2段	2 3段
+	double t0,t1,t2,t3,t4,t5,t6,tv;//tv是遍历用的变量
+	double ahis,vhis,acur,vcur;
+	double J,V,S;
+	int Ta,Ts;
+	u8 jogstate;//jog状态机 0无 1升速阶段 2匀速阶段 3降速阶段
+};
+
+struct tmotor{
+	u8 status;//0空闲 1ptp 2jog 3stop 4gear 5gearptp 6gearjog 7gearstop
+	struct tptp ptpdata;
+	struct tjog jogdata;
+	//OS_EVENT *ServoMsg; //伺服周期处理通知
+}motor;
+
+
+//所有的停止都采用jogstop来做，暂时不针对加速度来做停止算法，只针对速度来做
+//停止算法只根据时间来停止，而不关注停止指令后的位移
+u8 jogstop(int Ta,int Ts,double J)
+{
+	double V = 0;
+	if(motor.status == 1)
+	{
+		V =  motor.ptpdata.vcur;
+	}
+	else if(motor.status == 2)
+	{
+		V =  motor.jogdata.vcur;
+	}
+	else
+	{
+		return 1;
+	}
+	 
+	 {
+		 //计算曲线规划数据,V0,S0等都是指只有Ts的4段曲线情况
+		 double A = J * Ts;
+		 double V0 = A * Ts;
+		 double S0 = 2*V0*Ts;
+	
+		 //速度不够，加速阶段只有Ts
+		 if(V < V0)
+		 {
+		 	double Tsnew = sqrt(V/J);
+			double S0new = 2*V*Tsnew;
+	
+			{	
+				//按2段分别计算曲线上每个伺服时间点的v
+				motor.jogdata.vhis = V;
+				motor.jogdata.ahis = 0;
+	
+				//每段时间长度分别为
+				motor.jogdata.t0 = Tsnew;
+				motor.jogdata.t1 = Tsnew;
+
+				motor.jogdata.tv = 0;
+				motor.jogdata.jogtype = 1;
+				motor.status = 2;//jog状态
+			}
+		 }
+		 //速度足够的大,加速和减速阶段有Ta阶段
+		 else
+		 {
+		 	double S0new = V*Ta;
+			{
+				motor.jogdata.vhis = V;
+				motor.jogdata.ahis = 0;
+
+				//每段时间长度分别为
+				motor.jogdata.t0 = Ts;
+				motor.jogdata.t1 = (V-V0)/A;
+				motor.jogdata.t2 = Ts;
+
+				motor.jogdata.tv = 0;
+				motor.jogdata.jogtype = 2;
+				motor.status = 2;//jog状态
+			}
+		 }
+		motor.jogdata.jogstate = 3;//停止JOG运动
+	 }
+	 return 0;
+}
+
+
+
+//中断指令之后移动固定位置的停止jogstopins来做，暂时不针对加速度来做停止算法，只针对速度来做
+u8 jogstopins(int Ta,int Ts,double J,double S)
+{
+	double V = 0;
+	//取得当前速度
+	if(motor.status == 1)
+	{
+		V =  motor.ptpdata.vcur;
+	}
+	else if(motor.status == 2)
+	{
+		V =  motor.jogdata.vcur;
+	}
+	else
+	{
+		return 1;
+	}
+	 
+	 //曲线规划
+	 {
+
+		 //计算曲线规划数据,V0,S0等都是指只有Ts的4段曲线情况
+		 double A = J * Ts;
+		 double V0 = A * Ts;
+		 double S0 = 2*V0*Ts;
+	
+		 //速度不够，加速阶段只有Ts，且Ts有修改
+		 if(V < V0)
+		 {
+		 	double Tsnew = sqrt(V/J);
+			double S0new = V*Tsnew;
+	
+			//5段S曲线,有匀速阶段
+			if(S0new <= S)
+			{	
+				//按5段分别计算曲线上每个伺服时间点的v
+				motor.jogdata.vhis = 0;
+				motor.jogdata.ahis = 0;
+	
+				//每段时间长度分别为
+				motor.jogdata.t0 = Tsnew;
+				motor.jogdata.t1 = Tsnew;
+
+				motor.jogdata.tv = 0;
+				motor.jogdata.jogtype = 1;
+				motor.status = 2;//jog状态
+			}
+			else if(S0new > S)//4段曲线,距离不够，达不到最大速度，Tsnew要改变
+			{
+	 			//按4段分别计算曲线上每个伺服时间点的v
+				motor.jogdata.vhis = 0;
+				motor.jogdata.ahis = 0;
+	
+				Tsnew = pow((S/(J)),1.0/3);
+	
+				//每段时间长度分别为
+				motor.jogdata.t0 = Tsnew;
+				motor.jogdata.t1 = Tsnew;
+
+				motor.jogdata.tv = 0;
+				motor.jogdata.jogtype = 1;
+				motor.status = 2;//jog状态
+			}
+		 }
+		 else if((V>= V0) && (S< S0))//4段曲线，速度够距离不够，Ts要修改无匀速阶段
+		 {
+	 	 	double Tsnew;
+	
+			//按4段分别计算曲线上每个伺服时间点的v
+			motor.jogdata.vhis = 0;
+			motor.jogdata.ahis = 0;
+	
+			Tsnew = pow((S/(J)),1.0/3);
+	
+			//每段时间长度分别为
+			motor.jogdata.t0 = Tsnew;
+			motor.jogdata.t1 = Tsnew;
+
+			motor.jogdata.tv = 0;
+			motor.jogdata.jogtype = 1;
+			motor.status = 2;//jog状态
+		 }
+		 //速度和路程都足够的大,加速和减速阶段有Ta阶段,7段速度曲线
+		 else if((V >= V0) && (S >= S0))
+		 {
+		 	double S0new = V*Ta;
+		 	if(S0new <= S)//距离够，可以达到V,有7段
+			{
+				motor.jogdata.vhis = 0;
+				motor.jogdata.ahis = 0;
+
+				//每段时间长度分别为
+				motor.jogdata.t0 = Ts;
+				motor.jogdata.t1 = (V-V0)/A;
+				motor.jogdata.t2 = Ts;
+
+				motor.jogdata.tv = 0;
+				motor.jogdata.jogtype = 2;
+				motor.status = 2;//jog状态
+			}
+			//达不到速度V，只有6段,Ta长度要改变，无匀速阶段
+			else
+			{
+				motor.jogdata.vhis = 0;
+				motor.jogdata.ahis = 0;
+
+				//每段时间长度分别为
+				motor.jogdata.t0 = Ts;
+				motor.jogdata.t1 = sqrt(S/(J*Ts) + Ts*Ts/4 )- 1.5*Ts;
+				motor.jogdata.t2 = Ts;
+
+				motor.jogdata.tv = 0;
+				motor.jogdata.jogtype = 2;
+				motor.status = 2;//jog状态
+			}
+		 }
+		motor.jogdata.jogstate = 3;//停止JOG运动
+	 }
+	 return 0;
+}
+
+//点动
+u8 jog(int T,double V)
+{
+	if(motor.status != 0)
+		return 1;
+	 
+	 //jog状态机
+	 {
+
+		 //计算曲线规划数据,V0,S0等都是指只有Ts的4段曲线情况
+		 double A = J * Ts;
+		 double V0 = A * Ts;
+		 double S0 = 2*V0*Ts;
+	
+		 //速度不够，加速阶段只有Ts
+		 if(V < V0)
+		 {
+		 	double Tsnew = sqrt(V/J);
+			double S0new = 2*V*Tsnew;
+	
+			{	
+				//按5段分别计算曲线上每个伺服时间点的v
+				motor.jogdata.vhis = 0;
+				motor.jogdata.ahis = 0;
+	
+				//每段时间长度分别为
+				motor.jogdata.t0 = Tsnew;
+				motor.jogdata.t1 = Tsnew;
+
+				motor.jogdata.tv = 0;
+				motor.jogdata.jogtype = 1;
+				motor.status = 2;//jog状态
+			}
+		 }
+		 //速度足够的大,加速和减速阶段有Ta阶段
+		 else
+		 {
+		 	double S0new = V*Ta;
+			{
+				motor.jogdata.vhis = 0;
+				motor.jogdata.ahis = 0;
+
+				//每段时间长度分别为
+				motor.jogdata.t0 = Ts;
+				motor.jogdata.t1 = (V-V0)/A;
+				motor.jogdata.t2 = Ts;
+
+				motor.jogdata.tv = 0;
+				motor.jogdata.jogtype = 2;
+				motor.status = 2;//jog状态
+			}
+		 }
+		motor.jogdata.jogstate = 1;//启动JOG
+	 }
+	 return 0;
+}
+
+//点到点移动
+u8 ptp(int T,double V,double S)
+{	 
+	if(motor.status != 0)
+		return 1;
+
+	motor.ptpdata.J = 0;
+	motor.ptpdata.V = V;
+	motor.ptpdata.S = S;
+	 //ptp状态机
+	 {
+
+		 //计算曲线规划数据,V0,S0等都是指只有Ts的4段曲线情况
+		int Ts1 = floor(T/2);
+		double S0 = 2*V*Ts1;
+		double V0 = V;
+		int Ty = 0;
+		int Tss = 0;
+
+		//4段曲线,无法达到最高速V		
+		if(S0 >=S)
+		{
+			motor.ptpdata.vhis = 0;
+			motor.ptpdata.ahis = 0;
+
+			V0 = S/(2*Ts1);
+			motor.ptpdata.J = V0/(Ts1*Ts1);
+			motor.ptpdata.t0 = Ts1;
+			motor.ptpdata.t1 = Ts1;
+			motor.ptpdata.t2 = Ts1;
+			motor.ptpdata.t3 = Ts1;
+			
+			//开始
+			motor.ptpdata.tv = 0;
+			motor.ptpdata.ptptype = 2;
+			motor.status = 1;//ptp状态
+		 }
+		 else //可以达到最高速V,按5段分别计算曲线规划
+		 {
+			motor.ptpdata.vhis = 0;
+			motor.ptpdata.ahis = 0;
+
+			//匀速段时间，取整
+			Ty = floor((S-S0)/V);
+			
+			//为了保持时间整数，取得真正的V,会对于指令的V做修整
+			V0 = S/(2*Ts1 + Ty);
+
+			motor.ptpdata.V = V0;
+			motor.ptpdata.J = V0/(Ts1*Ts1);;
+			motor.ptpdata.t0 = Ts1;
+			motor.ptpdata.t1 = Ts1;
+			motor.ptpdata.t2 = Ty;
+			motor.ptpdata.t3 = Ts1;
+			motor.ptpdata.t4 = Ts1;
+
+			//开始
+			motor.ptpdata.tv = 0;
+			motor.ptpdata.ptptype = 1;
+			motor.status = 1;//ptp状态
+		 }
+	 }
+	 
+	 KernelRegs[90] = motor.ptpdata.t0*100;
+	 KernelRegs[91] = motor.ptpdata.t1*100;
+	 KernelRegs[92] = motor.ptpdata.t2*100;
+	 KernelRegs[93] = motor.ptpdata.t3*100;
+	 KernelRegs[94] = motor.ptpdata.t4*100;
+	 KernelRegs[95] = motor.ptpdata.t5*100;
+	 KernelRegs[96] = motor.ptpdata.t6*100;
+
+	 return 0;
+}
+
+
+//轴驱动任务
+static void ServoTask(void *p_arg)
+{
+	u8 err;
+	int cnt = 0;
+	motor.status = 0;
+
+	while (1) 
+	{
+		 //ptp状态机
+		 if(motor.status == 1)
+		 {
+	 		//按5段分别计算曲线上每个伺服时间点的v
+			if(motor.ptpdata.ptptype == 1)
+			{
+				//遍历曲线的时间变量
+				{
+				   //加加速阶段
+				   if(motor.ptpdata.tv < motor.ptpdata.t0)
+				   {
+				   	//加速度改变值
+					double achg = motor.ptpdata.J*1;
+	
+					//速度改变值
+					double vchg = motor.ptpdata.ahis*1 + achg*1/2;
+	
+					//当前时间点加速度
+				   	motor.ptpdata.acur = motor.ptpdata.ahis+achg;
+	
+	
+					//当前时间点速度
+					motor.ptpdata.vcur = motor.ptpdata.vhis+vchg;
+	
+					//设置速度到fpga
+					MotorSetSpeed(0,motor.ptpdata.vcur);
+	
+					//保持历史值
+					motor.ptpdata.ahis = motor.ptpdata.acur;
+					motor.ptpdata.vhis = motor.ptpdata.vcur;
+	
+				   }
+				   //减减速阶段
+				   else if((motor.ptpdata.tv<(motor.ptpdata.t0+motor.ptpdata.t1)) && (motor.ptpdata.tv>= motor.ptpdata.t0))
+				   {
+				   	//加速度改变值
+					double achg = 0-motor.ptpdata.J*1;
+	
+					//速度改变值
+					double vchg = motor.ptpdata.ahis*1 + achg*1/2;
+	
+					//当前时间点加速度
+				   	motor.ptpdata.acur = motor.ptpdata.ahis+achg;
+	
+					//当前时间点速度
+					motor.ptpdata.vcur = motor.ptpdata.vhis+vchg;
+	
+					//设置速度到fpga
+					MotorSetSpeed(0,motor.ptpdata.vcur);
+	
+					//保持历史值
+					motor.ptpdata.ahis = motor.ptpdata.acur;
+					motor.ptpdata.vhis = motor.ptpdata.vcur;
+				   }
+				   //匀速阶段
+				   else if((motor.ptpdata.tv<(motor.ptpdata.t0+motor.ptpdata.t1+motor.ptpdata.t2)) && (motor.ptpdata.tv >= (motor.ptpdata.t0+motor.ptpdata.t1)))
+				   {
+	
+					MotorSetSpeed(0,motor.ptpdata.V);
+	
+					motor.ptpdata.vcur = motor.ptpdata.V;
+					motor.ptpdata.vhis = motor.ptpdata.vcur;
+					motor.ptpdata.ahis = 0;
+	
+				   }
+				   //减减速度阶段
+				   else if((motor.ptpdata.tv<(motor.ptpdata.t0+motor.ptpdata.t1+motor.ptpdata.t2+motor.ptpdata.t3)) && (motor.ptpdata.tv >= (motor.ptpdata.t0+motor.ptpdata.t1+motor.ptpdata.t2)))
+				   {
+				   	//加速度改变值
+					double achg = 0-motor.ptpdata.J*1;
+	
+					//速度改变值
+					double vchg = motor.ptpdata.ahis*1 + achg*1/2;
+	
+					//当前时间点加速度
+				   	motor.ptpdata.acur = motor.ptpdata.ahis+achg;
+	
+					//当前时间点速度
+					motor.ptpdata.vcur = motor.ptpdata.vhis+vchg;
+	
+					//设置速度到fpga
+					MotorSetSpeed(0,motor.ptpdata.vcur);
+	
+					//保持历史值
+					motor.ptpdata.ahis = motor.ptpdata.acur;
+					motor.ptpdata.vhis = motor.ptpdata.vcur;
+				   }
+				   //加加速度阶段
+				   else if((motor.ptpdata.tv<(motor.ptpdata.t0+motor.ptpdata.t1+motor.ptpdata.t2+motor.ptpdata.t3+motor.ptpdata.t4)) && (motor.ptpdata.tv >= (motor.ptpdata.t0+motor.ptpdata.t1+motor.ptpdata.t2+motor.ptpdata.t3)))
+				   {
+				   	//加速度改变值
+					double achg = motor.ptpdata.J*1;
+	
+					//速度改变值
+					double vchg = motor.ptpdata.ahis*1 + achg*1/2;
+	
+					//当前时间点加速度
+				   	motor.ptpdata.acur = motor.ptpdata.ahis+achg;
+	
+	
+					//当前时间点速度
+					motor.ptpdata.vcur = motor.ptpdata.vhis+vchg;
+	
+					//设置速度到fpga
+					MotorSetSpeed(0,motor.ptpdata.vcur);
+	
+					//保持历史值
+					motor.ptpdata.ahis = motor.ptpdata.acur;
+					motor.ptpdata.vhis = motor.ptpdata.vcur;
+				   }
+				   //执行完毕，等位移完成后，设置速度为0，此处暂时不等位移条件，直接设置速度
+				   else	if(motor.ptpdata.tv >= (motor.ptpdata.t0+motor.ptpdata.t1+motor.ptpdata.t2+motor.ptpdata.t3+motor.ptpdata.t4))
+				   {
+					MotorSetSpeed(0,0);
+	
+				   	motor.ptpdata.vcur = 0;
+				   	//设置速度到fpga
+				   	motor.status = 0;
+				   }
+				   motor.ptpdata.tv++;
+				}
+	
+			}
+			else if(motor.ptpdata.ptptype == 2)
+			{
+				{
+				   //加加速阶段
+				   if(motor.ptpdata.tv < motor.ptpdata.t0)
+				   {
+				   	//加速度改变值
+					double achg = motor.ptpdata.J*1;
+					//速度改变值
+					double vchg = motor.ptpdata.ahis*1 + achg*1/2;
+	
+					//当前时间点加速度
+				   	motor.ptpdata.acur = motor.ptpdata.ahis+achg;
+	
+	
+					//当前时间点速度
+					motor.ptpdata.vcur = motor.ptpdata.vhis+vchg;
+	
+					//设置速度到fpga
+	 				MotorSetSpeed(0,motor.ptpdata.vcur);
+	
+					//保持历史值
+					motor.ptpdata.ahis = motor.ptpdata.acur;
+					motor.ptpdata.vhis = motor.ptpdata.vcur;
+	
+				   }
+				   //减减速阶段
+				   else if((motor.ptpdata.tv<(motor.ptpdata.t0+motor.ptpdata.t1)) && (motor.ptpdata.tv>= motor.ptpdata.t0))
+				   {
+				   	//加速度改变值
+					double achg = 0-motor.ptpdata.J*1;
+	
+					//速度改变值
+					double vchg = motor.ptpdata.ahis*1 + achg*1/2;
+	
+					//当前时间点加速度
+				   	motor.ptpdata.acur = motor.ptpdata.ahis+achg;
+	
+	
+					//当前时间点速度
+					motor.ptpdata.vcur = motor.ptpdata.vhis+vchg;
+	
+					//设置速度到fpga
+					MotorSetSpeed(0,motor.ptpdata.vcur);
+	
+					//保持历史值
+					motor.ptpdata.ahis = motor.ptpdata.acur;
+					motor.ptpdata.vhis = motor.ptpdata.vcur;
+				   }
+				   //减减速度阶段
+				   else if((motor.ptpdata.tv<(motor.ptpdata.t0+motor.ptpdata.t1+motor.ptpdata.t2)) && (motor.ptpdata.tv >= (motor.ptpdata.t0+motor.ptpdata.t1)))
+				   {
+				   	//加速度改变值
+					double achg =0 -motor.ptpdata.J*1;
+	
+					//速度改变值
+					double vchg = motor.ptpdata.ahis*1 + achg*1/2;
+	
+					//当前时间点加速度
+				   	motor.ptpdata.acur = motor.ptpdata.ahis+achg;
+	
+	
+					//当前时间点速度
+					motor.ptpdata.vcur = motor.ptpdata.vhis+vchg;
+	
+					//设置速度到fpga
+					MotorSetSpeed(0,motor.ptpdata.vcur);
+	
+					//保持历史值
+					motor.ptpdata.ahis = motor.ptpdata.acur;
+					motor.ptpdata.vhis = motor.ptpdata.vcur;
+				   	
+				   }
+				   //加加速度阶段
+				   else if((motor.ptpdata.tv<(motor.ptpdata.t0+motor.ptpdata.t1+motor.ptpdata.t2+motor.ptpdata.t3)) && (motor.ptpdata.tv >= (motor.ptpdata.t0+motor.ptpdata.t1+motor.ptpdata.t2)))
+				   {
+				   	//加速度改变值
+					double achg = motor.ptpdata.J*1;
+	
+					//速度改变值
+					double vchg = motor.ptpdata.ahis*1 + achg*1/2;
+	
+					//当前时间点加速度
+				   	motor.ptpdata.acur = motor.ptpdata.ahis+achg;
+	
+	
+					//当前时间点速度
+					motor.ptpdata.vcur = motor.ptpdata.vhis+vchg;
+	
+					//设置速度到fpga
+					MotorSetSpeed(0,motor.ptpdata.vcur);
+	
+					//保持历史值
+					motor.ptpdata.ahis = motor.ptpdata.acur;
+					motor.ptpdata.vhis = motor.ptpdata.vcur;
+				   }
+				   //执行完毕，等位移完成后，设置速度为0，此处暂时不等位移条件，直接设置速度
+				   else	 if(motor.ptpdata.tv >= (motor.ptpdata.t0+motor.ptpdata.t1+motor.ptpdata.t2+motor.ptpdata.t3))
+				   {
+					MotorSetSpeed(0,0);
+	
+				   	motor.ptpdata.vcur = 0;
+				   	//设置速度到fpga
+				   	motor.status = 0;
+				   }
+				   motor.ptpdata.tv++;
+				}
+	
+			}
+		 }
+		 //jog状态机
+		 else if(motor.status == 2)
+		 {
+			//JOG启动阶段
+			if(motor.jogdata.jogstate == 1)
+			{
+		 		//按2段分别计算曲线上每个伺服时间点的v
+				if( motor.jogdata.jogtype == 1)
+				{
+					//遍历曲线的时间变量
+					{
+					   //加加速阶段
+					   if(motor.jogdata.tv < motor.jogdata.t0)
+					   {
+					   	//加速度改变值
+						double achg = motor.jogdata.J*1;
+		
+						//速度改变值
+						double vchg = motor.jogdata.ahis*1 + achg*1/2;
+		
+						//当前时间点加速度
+					   	motor.jogdata.acur = motor.jogdata.ahis+achg;
+		
+		
+						//当前时间点速度
+						motor.jogdata.vcur = motor.jogdata.vhis+vchg;
+		
+						//设置速度到fpga
+						MotorSetSpeed(0,motor.jogdata.vcur);
+		
+						//保持历史值
+						motor.jogdata.ahis = motor.jogdata.acur;
+						motor.jogdata.vhis = motor.jogdata.vcur;
+						motor.ptpdata.tv++;
+					   }
+					   //减减速阶段
+					   else if((motor.jogdata.tv<(motor.jogdata.t0+motor.jogdata.t1)) && (motor.jogdata.tv>= motor.jogdata.t0))
+					   {
+					   	//加速度改变值
+						double achg = 0-motor.jogdata.J*1;
+		
+						//速度改变值
+						double vchg = motor.jogdata.ahis*1 + achg*1/2;
+		
+						//当前时间点加速度
+					   	motor.jogdata.acur = motor.jogdata.ahis+achg;
+		
+						//当前时间点速度
+						motor.jogdata.vcur = motor.jogdata.vhis+vchg;
+		
+						//设置速度到fpga
+						MotorSetSpeed(0,motor.jogdata.vcur);
+		
+						//保持历史值
+						motor.jogdata.ahis = motor.jogdata.acur;
+						motor.jogdata.vhis = motor.jogdata.vcur;
+						motor.ptpdata.tv++;
+					   }
+					   else if(motor.jogdata.tv>=(motor.jogdata.t0+motor.jogdata.t1))
+					   {
+						//当前时间点速度
+						motor.jogdata.vcur = motor.jogdata.V;
+						motor.jogdata.jogstate = 2;
+						//设置速度到fpga
+						MotorSetSpeed(0,motor.jogdata.vcur);
+						motor.jogdata.vhis = motor.jogdata.vcur;
+						motor.ptpdata.tv++;
+					   }
+					}
+				}
+			}
+			//匀速阶段
+			else if(motor.jogdata.jogstate == 2)
+			{
+				//当前时间点速度
+				motor.jogdata.vcur = motor.jogdata.V;
+				//设置速度到fpga
+				MotorSetSpeed(0,motor.jogdata.vcur);
+				motor.jogdata.vhis = motor.jogdata.vcur;
+			}
+			//降速阶段
+			else if(motor.jogdata.jogstate == 3)
+			{
+	
+		 		//按2段分别计算曲线上每个伺服时间点的v
+				if( motor.jogdata.jogtype == 1)
+				{
+				   //减减速度阶段
+				   if((motor.jogdata.tv<(motor.jogdata.t0)) && (motor.jogdata.tv >= (0)))
+				   {
+				   	//加速度改变值
+					double achg = 0-motor.jogdata.J*1;
+	
+					//速度改变值
+					double vchg = motor.jogdata.ahis*1 + achg*1/2;
+	
+					//当前时间点加速度
+				   	motor.jogdata.acur = motor.jogdata.ahis+achg;
+	
+					//当前时间点速度
+					motor.jogdata.vcur = motor.jogdata.vhis+vchg;
+	
+					//设置速度到fpga
+					MotorSetSpeed(0,motor.jogdata.vcur);
+	
+					//保持历史值
+					motor.jogdata.ahis = motor.jogdata.acur;
+					motor.jogdata.vhis = motor.jogdata.vcur;
+				   }
+				   //加加速度阶段
+				   else if((motor.jogdata.tv<(motor.jogdata.t0+motor.jogdata.t1)) && (motor.ptpdata.tv >= (motor.ptpdata.t0)))
+				   {
+				   	//加速度改变值
+					double achg = motor.jogdata.J*1;
+	
+					//速度改变值
+					double vchg = motor.jogdata.ahis*1 + achg*1/2;
+	
+					//当前时间点加速度
+				   	motor.jogdata.acur = motor.jogdata.ahis+achg;
+	
+	
+					//当前时间点速度
+					motor.jogdata.vcur = motor.jogdata.vhis+vchg;
+	
+					//设置速度到fpga
+					MotorSetSpeed(0,motor.jogdata.vcur);
+	
+					//保持历史值
+					motor.jogdata.ahis = motor.jogdata.acur;
+					motor.jogdata.vhis = motor.jogdata.vcur;
+				   }
+				   else if(motor.jogdata.tv>=(motor.jogdata.t0+motor.jogdata.t1)) 
+				   {
+					MotorSetSpeed(0,0);
+	
+				   	motor.ptpdata.vcur = 0;
+				   	//设置速度到fpga
+				   	motor.status = 0;
+				   }
+				}
+			}
+		}
+		//输出使能
+	 	MotorPwmout(0xff);
+		//速度改变
+		MotorSpeedFlush(0xff);
+
+		//等待伺服定时器通知,便于同步处理
+   		OSSemPend(Servotimermsg,0,&err);
+		//servo数据切换
+		Motorpingpong();
+
+		//通知刷新所有的轴的位置
+		MotorOutCntFlush(0xff);
+
+		//读轴的当前位置
+		cnt = MotorReadOutCnt(0);
+		KernelRegs[81] = cnt & 0x0000ffff;
+		KernelRegs[82] = (cnt >> 16) & 0x0000ffff;
+
+		cnt = MotorReadOutCnt(1);
+		KernelRegs[83] = cnt & 0x0000ffff;
+		KernelRegs[84] = (cnt >> 16) & 0x0000ffff;
+		KernelRegs[86] = motor.ptpdata.vcur*1000;
+ 		//OSTimeDlyHMSM(0, 0, 0, 1);
+
+	}
+}
+
+//伺服驱动定时器任务
+static void ServotimerTask(void *p_arg)
+{
+	//Servotimermsg = OSSemCreate(0);
+	while(1)
+	{
+		OSTimeDlyHMSM(0, 0, 0, 1);
+		OSSemPost(Servotimermsg);		//发送通知
+	}
+}
 
 /*
 *********************************************************************************************************
@@ -80,48 +849,25 @@ void printint(int num);
 int main(void)
 {
 	CPU_INT08U  err;
-	/*
-		SystemInit();
-			
-		配置内部Flash接口，初始化PLL，配置系统频率。系统时钟缺省配置为72MHz，
-		在 system_stm32f10x.c 文件中定义系统时钟 SYSCLK_FREQ_72MHz。
-		这个函数是ST库中的函数，函数实体在 system_stm32f10x.c 文件 (V3.4.0)
-		
-		startup_stm32f10x_hd.s 启动文件中已经调用了SystemInit()函数。
-	*/
+	int i;
+	//等fpga配置完毕
+	for(i = 0; i < 1000000; i ++);
 	
 	/* 初始化"uC/OS-II"内核 */
+
 	OSInit();
+ 	SystemInit();
+ 	Servotimermsg = OSSemCreate(0);
 
-	SystemInit();
-   	//BSP_ExtSramInit();
-	BSP_232CInit();
-	BSP_232COpen();
-	BSP_485Init();
-	BSP_485Open();
-	BSP_USBInit();
+	//BSP_232CInit();
+	//BSP_232COpen();
+	BSP_ExtSramInit();
+ 	BSP_USBInit();
 	BSP_USBOpen();
-	BSP_ADCInit();
-	BSP_ADCOpen();
-	BSP_EEPROMInit();
-	BSP_EEPROMOpen();
-	BSP_ENCInit();
-  	BSP_ENCOpen();
-
 
 
 	App_Backend_Init();
 	USB_ModbusMaster_Init();
-	Timer5_Configuration(0);   
-	Timer4_Configuration();
-	GPIO_Configuration();
-	App_RegsInit();
-	App_Paramload();
-	//加密初始化
-	App_Encryption_Init();
-	//加密校验
-	App_Encryption_Verify();
-	State.Basic.OK=1;
 	
 	/* 禁止所有的中断 */
 	BSP_IntDisAll();
@@ -180,10 +926,7 @@ static void AppTaskStart(void *p_arg)
 	/* 任务主体，必须是一个死循环 */
 	while (1)     
 	{
-		//u8 state = OSCPUUsage;
-		OSTimeDlyHMSM(0, 0, 0, 200);
-
-		//BSP_USBWrite(&state,1);
+		OSTimeDlyHMSM(20, 0, 0, 0);
 	}
 }
 
@@ -200,6 +943,7 @@ static void AppTaskCreate (void)
 	CPU_INT08U      err;
 
 
+	
 	OSTaskCreateExt(AppTask232C,
                     (void *)0,
                     (OS_STK *)&AppTask232CStk[APP_TASK_232C_STK_SIZE - 1],
@@ -212,17 +956,29 @@ static void AppTaskCreate (void)
 
 	OSTaskNameSet(APP_TASK_232C_PRIO, APP_TASK_232C_NAME, &err);
 
-	OSTaskCreateExt(App_RgesRun,
+	OSTaskCreateExt(ServotimerTask,
                     (void *)0,
-                    (OS_STK *)&AppTaskRegsStk[APP_TASK_REGS_STK_SIZE - 1],
-                    APP_TASK_REGS_PRIO,
-                    APP_TASK_REGS_PRIO,
-                    (OS_STK *)&AppTaskRegsStk[0],
-                    APP_TASK_REGS_STK_SIZE,
+                    (OS_STK *)&AppTaskServotimerStk[APP_TASK_SERVOTIMER_STK_SIZE - 1],
+                    APP_TASK_SERVOTIMER_PRIO,
+                    APP_TASK_SERVOTIMER_PRIO,
+                    (OS_STK *)&AppTaskServotimerStk[0],
+                    APP_TASK_SERVOTIMER_STK_SIZE,
                     (void *)0,
                     OS_TASK_OPT_STK_CHK | OS_TASK_OPT_STK_CLR);
 
-	OSTaskNameSet(APP_TASK_REGS_PRIO, APP_TASK_REGS_NAME, &err);
+	OSTaskNameSet(APP_TASK_SERVOTIMER_PRIO, APP_TASK_SERVOTIMER_NAME, &err);
+
+	OSTaskCreateExt(ServoTask,
+                    (void *)0,
+                    (OS_STK *)&AppTaskServoStk[APP_TASK_SERVO_STK_SIZE - 1],
+                    APP_TASK_SERVO_PRIO,
+                    APP_TASK_SERVO_PRIO,
+                    (OS_STK *)&AppTaskServoStk[0],
+                    APP_TASK_SERVO_STK_SIZE,
+                    (void *)0,
+                    OS_TASK_OPT_STK_CHK | OS_TASK_OPT_STK_CLR);
+
+	OSTaskNameSet(APP_TASK_SERVO_PRIO, APP_TASK_SERVO_NAME, &err);
 
 	OSTaskCreateExt(App_HeartbeatTask_Run,
                     (void *)0,
@@ -234,17 +990,6 @@ static void AppTaskCreate (void)
                     (void *)0,
                     OS_TASK_OPT_STK_CHK | OS_TASK_OPT_STK_CLR);
 	OSTaskNameSet(APP_TASK_HEARTBEAT_PRIO, APP_TASK_HEARTBEAT_NAME, &err);
-
-	OSTaskCreateExt(App_FlushParaTask_Run,
-                    (void *)0,
-                    (OS_STK *)&AppTaskFlushParaStk[APP_TASK_FLUSHPARA_STK_SIZE - 1],
-                    APP_TASK_FLUSHPARA_PRIO,
-                    APP_TASK_FLUSHPARA_PRIO,
-                    (OS_STK *)&AppTaskFlushParaStk[0],
-                    APP_TASK_FLUSHPARA_STK_SIZE,
-                    (void *)0,
-                    OS_TASK_OPT_STK_CHK | OS_TASK_OPT_STK_CLR);
-	OSTaskNameSet(APP_TASK_FLUSHPARA_PRIO, APP_TASK_FLUSHPARA_NAME, &err);
 
 	OSTaskCreateExt(USBCOM_Run,
                     (void *)0,
@@ -270,78 +1015,6 @@ static void AppTaskCreate (void)
 
 	OSTaskNameSet(APP_TASK_USBGATHER_PRIO, APP_TASK_USBGATHER_NAME, &err);
 
-	OSTaskCreateExt(C485COM_Run,
-                    (void *)0,
-                    (OS_STK *)&AppTask485COMStk[APP_TASK_485COM_STK_SIZE - 1],
-                    APP_TASK_485COM_PRIO,
-                    APP_TASK_485COM_PRIO,
-                    (OS_STK *)&AppTask485COMStk[0],
-                    APP_TASK_485COM_STK_SIZE,
-                    (void *)0,
-                    OS_TASK_OPT_STK_CHK | OS_TASK_OPT_STK_CLR);
-
-	OSTaskNameSet(APP_TASK_485COM_PRIO, APP_TASK_USBCOM_NAME, &err);
-
-	OSTaskCreateExt(BSP_SonicRun,
-                    (void *)0,
-                    (OS_STK *)&AppTaskSonicStk[APP_TASK_SONIC_STK_SIZE - 1],
-                    APP_TASK_SONIC_PRIO,
-                    APP_TASK_SONIC_PRIO,
-                    (OS_STK *)&AppTaskSonicStk[0],
-                    APP_TASK_SONIC_STK_SIZE,
-                    (void *)0,
-                    OS_TASK_OPT_STK_CHK | OS_TASK_OPT_STK_CLR);
-
-	OSTaskNameSet(APP_TASK_SONIC_PRIO, APP_TASK_SONIC_NAME, &err);
-
-
-	OSTaskCreateExt(BSP_ENCRun,
-                    (void *)0,
-                    (OS_STK *)&AppTaskENCStk[APP_TASK_ENC_STK_SIZE - 1],
-                    APP_TASK_ENC_PRIO,
-                    APP_TASK_ENC_PRIO,
-                    (OS_STK *)&AppTaskENCStk[0],
-                    APP_TASK_ENC_STK_SIZE,
-                    (void *)0,
-                    OS_TASK_OPT_STK_CHK | OS_TASK_OPT_STK_CLR);
-
-	OSTaskNameSet(APP_TASK_ENC_PRIO, APP_TASK_ENC_NAME, &err);
-
-	OSTaskCreateExt(BSP_DACRun,
-                    (void *)0,
-                    (OS_STK *)&AppTaskDACStk[APP_TASK_DAC_STK_SIZE - 1],
-                    APP_TASK_DAC_PRIO,
-                    APP_TASK_DAC_PRIO,
-                    (OS_STK *)&AppTaskDACStk[0],
-                    APP_TASK_DAC_STK_SIZE,
-                    (void *)0,
-                    OS_TASK_OPT_STK_CHK | OS_TASK_OPT_STK_CLR);
-
-	OSTaskNameSet(APP_TASK_DAC_PRIO, APP_TASK_DAC_NAME, &err);
-
-	OSTaskCreateExt(TIM4_ProcessRun,
-                    (void *)0,
-                    (OS_STK *)&AppTaskTIM4Stk[APP_TASK_TIM4_STK_SIZE - 1],
-                    APP_TASK_TIM4_PRIO,
-                    APP_TASK_TIM4_PRIO,
-                    (OS_STK *)&AppTaskTIM4Stk[0],
-                    APP_TASK_TIM4_STK_SIZE,
-                    (void *)0,
-                    OS_TASK_OPT_STK_CHK | OS_TASK_OPT_STK_CLR);
-
-	OSTaskNameSet(APP_TASK_TIM4_PRIO, APP_TASK_TIM4_NAME, &err);
-
-	OSTaskCreateExt(PIDRun,
-                    (void *)0,
-                    (OS_STK *)&AppTaskPIDStk[APP_TASK_PID_STK_SIZE - 1],
-                    APP_TASK_PID_PRIO,
-                    APP_TASK_PID_PRIO,
-                    (OS_STK *)&AppTaskPIDStk[0],
-                    APP_TASK_PID_STK_SIZE,
-                    (void *)0,
-                    OS_TASK_OPT_STK_CHK | OS_TASK_OPT_STK_CLR);
-
-	OSTaskNameSet(APP_TASK_PID_PRIO, APP_TASK_PID_NAME, &err);
 }
 
 
@@ -358,67 +1031,75 @@ static void AppTaskCreate (void)
 */
 static void AppTask232C(void *p_arg)
 {
-	(void)p_arg;		/* 避免编译器告警 */
-  	//延迟300ms等待fpga准备就绪，串行epcs需要时间？
+	u16 oldreg79 = 0;	//历史寄存器79，控制位
+	u16 oldreg00 = 0;	//历史寄存器00，速度值mm/s
+	u16 oldreg01 = 0;	//历史寄存器01，速度值mm/s
+	u16 oldreg02 = 0;	//历史寄存器02，速度值mm/s
+	u16 oldreg03 = 0;	//历史寄存器03，速度值mm/s
+	u16 oldreg04 = 0;	//历史寄存器04，速度值mm/s
+	u16 oldreg05 = 0;	//历史寄存器05，速度值mm/s
+	u16 oldreg06 = 0;	//历史寄存器06，速度值mm/s
+	u16 oldreg07 = 0;	//历史寄存器07，速度值mm/s
+	u8 speedchg = 0;
+	int ii=0;
+	short passclk = 0;
+	u8 speedstate = 0;
+	int cnt = 0;
+
+	(void)p_arg;	//避免编译器告警
+ 
+ 	//延迟300ms等待fpga准备就绪，串行epcs需要时间？
  	//OSTimeDlyHMSM(0, 0, 0, 300);
+
+	for(ii = 0;ii <100;ii++)
+	{
+		KernelRegs[ii] = 0;
+	}
+
 	while (1) 
 	{
 	    u8 buff[30];
 		u16 l = 0;
-		int passclk,iii;
-		if(BSP_232CInBuffLen()>0)
+		int iii = 0;
+		speedchg = 0;
+		
+	/*	if(speedstate == 0)
 		{
-			l = BSP_232CRead(buff,BSP_232CInBuffLen());
-			BSP_232CWrite(buff,l);
+
+			if(KernelRegs[00] > 500)
+			{
+				speedstate = 1;
+			}
+			else
+			{
+				KernelRegs[00]++;
+			}
 		}
- 		//if(BSP_485InBuffLen()>0)
-		//{
-		//	l = BSP_485Read(buff,BSP_485InBuffLen());
-		//	BSP_485Write(buff,l);
-		//}
+		else
+		{
+			if(KernelRegs[00] < -500)
+			{
+				speedstate = 0;
+			}
+			else
+			{
+				KernelRegs[00]--;
+			}
+		}
+	*/	
+		
+		
 
-		//if(BSP_USBInBuffLen()>0)
-		//{
-		//	l = BSP_USBRead(buff,BSP_USBInBuffLen());
-		//	BSP_USBWrite(buff,l);
-		//}
-		//printint(BSP_SonicRead());
-		//printint(*BSP_ADC1);
+		if((((oldreg79 >> 4) & 0x0001) == 0x0000) &&(((KernelRegs[79]>>4) & 0x0001) == 0x0001))
+		{
+			ptp(KernelRegs[0],(double)(KernelRegs[1])/10,(double)(KernelRegs[2]));
+		}
+		oldreg79 = KernelRegs[79];
 
-		/* 延迟10ms。必须释放CPU，否则低优先级任务会阻塞 */    	
-		OSTimeDlyHMSM(0, 0, 0, 1);	 /* 也可以调用 OSTimeDly() 函数实现延迟 */
+		OSTimeDlyHMSM(0, 0, 0, 20);	 /* 也可以调用 OSTimeDly() 函数实现延迟 */				  
 	}
 }
 
-
-static void PIDRun(void *p_arg)
-{
-	/* 延迟1000ms,等待 */    	
-	OSTimeDlyHMSM(0, 0, 0, 1000);	 /* 也可以调用 OSTimeDly() 函数实现延迟 */
-  	while(1)
-	{
-		//查询校验结果
-		if(App_Encryption_Invalid() == 1)
-		{
-			OSTimeDlyHMSM(0, 0, 0, 1);
-			continue;
-		}
-//	KernelRegs[89]= State.Work.MSpeed;
-//	KernelRegs[90]=State.Work.Dia;
-//	KernelRegs[88]= State.Work.Tens;		 //1809		 //1438  //2176
-
-	OutControl();		//主控制流程
-	 if(State.Basic.OK==1)
-	{
- 		App_Paramload();	//参数刷新
-   		IOInput();     //IO输入口处理
-		APortOutput();				//模拟量输出口
-   		APortInput();	//模拟理入口处理
-	}
-
-
-	}
-}
 
 /*
 *********************************************************************************************************
