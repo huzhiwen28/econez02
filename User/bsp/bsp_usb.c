@@ -74,11 +74,15 @@ void BSP_USBInit()
          | RCC_APB2Periph_GPIOD | RCC_APB2Periph_GPIOE | RCC_APB2Periph_GPIOF | RCC_APB2Periph_GPIOG
          | RCC_APB2Periph_AFIO | RCC_APB2Periph_GPIO_DISCONNECT, ENABLE);
 
+  	GPIO_PinRemapConfig(GPIO_Remap_SWJ_JTAGDisable,ENABLE);
+ 
   	/* Configure USB pull-up pin */
   	GPIO_InitStructure.GPIO_Pin = USB_DISCONNECT_PIN;
   	GPIO_InitStructure.GPIO_Speed = GPIO_Speed_50MHz;
-  	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_OD;
+  	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_Out_PP;
   	GPIO_Init(USB_DISCONNECT, &GPIO_InitStructure);
+
+    GPIO_ResetBits(USB_DISCONNECT,USB_DISCONNECT_PIN);
 
   	Set_USBClock();
   	USB_Interrupts_Config();

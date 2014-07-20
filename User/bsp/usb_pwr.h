@@ -31,9 +31,9 @@
 typedef enum {FALSE = 0, TRUE = !FALSE} bool;
 #define EVAL_COM1                        USART1
 
-#define USB_DISCONNECT                      GPIOA  
-#define USB_DISCONNECT_PIN                  GPIO_Pin_15
-#define RCC_APB2Periph_GPIO_DISCONNECT      RCC_APB2Periph_GPIOA
+#define USB_DISCONNECT                      GPIOC  
+#define USB_DISCONNECT_PIN                  GPIO_Pin_7
+#define RCC_APB2Periph_GPIO_DISCONNECT      RCC_APB2Periph_GPIOC
 #define EVAL_COM1_IRQn                      USART1_IRQn
 
 /* Exported functions ------------------------------------------------------- */

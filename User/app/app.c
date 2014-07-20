@@ -278,7 +278,7 @@ u8 jogstopins(int Ta,int Ts,double J,double S)
 }
 
 //µã¶¯
-u8 jog(int T,double V)
+u8 jog(int Ta,int Ts,double J, double V)
 {
 	if(motor.status != 0)
 		return 1;

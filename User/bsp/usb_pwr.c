@@ -120,6 +120,7 @@ void Set_System(void)
   }
 
   RCC_APB2PeriphClockCmd(RCC_APB2Periph_AFIO, ENABLE);    //‘ –ÌAFIO ±÷”
+  //GPIO_PinRemapConfig(GPIO_Remap_SWJ_JTAGDisable,ENABLE);
 
   /* Enable USB_DISCONNECT GPIO clock */
   RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIO_DISCONNECT, ENABLE);

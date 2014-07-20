@@ -42,3 +42,12 @@ Icon
 *.o
 *.plg
 *.dep
+*.map
+*.axf
+*.hex
+*.htm
+*.lnp
+*.tra
+*._i
+*.bak
+

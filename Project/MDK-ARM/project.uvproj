@@ -12,14 +12,14 @@
       <ToolsetName>ARM-ADS</ToolsetName>
       <TargetOption>
         <TargetCommonOption>
-          <Device>STM32F103ZE</Device>
+          <Device>STM32F103VC</Device>
           <Vendor>STMicroelectronics</Vendor>
-          <Cpu>IRAM(0x20000000-0x2000FFFF) IROM(0x8000000-0x807FFFF) CLOCK(8000000) CPUTYPE("Cortex-M3")</Cpu>
+          <Cpu>IRAM(0x20000000-0x2000BFFF) IROM(0x8000000-0x803FFFF) CLOCK(8000000) CPUTYPE("Cortex-M3")</Cpu>
           <FlashUtilSpec></FlashUtilSpec>
-          <StartupFile>"STARTUP\ST\STM32F10x.s" ("STM32 Startup Code")</StartupFile>
-          <FlashDriverDll>UL2CM3(-O14 -S0 -C0 -N00("ARM Cortex-M3") -D00(1BA00477) -L00(4) -FO7 -FD20000000 -FC800 -FN1 -FF0STM32F10x_512 -FS08000000 -FL080000)</FlashDriverDll>
-          <DeviceId>4216</DeviceId>
-          <RegisterFile>stm32f10x_lib.h</RegisterFile>
+          <StartupFile>"STARTUP\ST\STM32F10x\startup_stm32f10x_hd.s" ("STM32 High Density Line Startup Code")</StartupFile>
+          <FlashDriverDll>UL2CM3(-O14 -S0 -C0 -N00("ARM Cortex-M3") -D00(1BA00477) -L00(4) -FO7 -FD20000000 -FC800 -FN1 -FF0STM32F10x_512 -FS08000000 -FL040000)</FlashDriverDll>
+          <DeviceId>4226</DeviceId>
+          <RegisterFile>stm32f10x_hd.h</RegisterFile>
           <MemoryEnv></MemoryEnv>
           <Cmp></Cmp>
           <Asm></Asm>
@@ -29,7 +29,7 @@
           <SLE66CMisc></SLE66CMisc>
           <SLE66AMisc></SLE66AMisc>
           <SLE66LinkerMisc></SLE66LinkerMisc>
-          <SFDFile></SFDFile>
+          <SFDFile>SFD\ST\STM32F10xx\STM32F10xxE.sfr</SFDFile>
           <UseEnv>0</UseEnv>
           <BinPath></BinPath>
           <IncludePath></IncludePath>
@@ -100,11 +100,11 @@
           <SimDllName>SARMCM3.DLL</SimDllName>
           <SimDllArguments></SimDllArguments>
           <SimDlgDll>DARMSTM.DLL</SimDlgDll>
-          <SimDlgDllArguments>-pSTM32F103ZE</SimDlgDllArguments>
+          <SimDlgDllArguments>-pSTM32F103VC</SimDlgDllArguments>
           <TargetDllName>SARMCM3.DLL</TargetDllName>
           <TargetDllArguments></TargetDllArguments>
           <TargetDlgDll>TARMSTM.DLL</TargetDlgDll>
-          <TargetDlgDllArguments>-pSTM32F103ZE</TargetDlgDllArguments>
+          <TargetDlgDllArguments>-pSTM32F103VC</TargetDlgDllArguments>
         </DllOption>
         <DebugOption>
           <OPTHX>
@@ -160,10 +160,10 @@
             <RunIndependent>0</RunIndependent>
             <UpdateFlashBeforeDebugging>1</UpdateFlashBeforeDebugging>
             <Capability>1</Capability>
-            <DriverSelection>4101</DriverSelection>
+            <DriverSelection>4099</DriverSelection>
           </Flash1>
           <Flash2>Segger\JL2CM3.dll</Flash2>
-          <Flash3>"" ()</Flash3>
+          <Flash3></Flash3>
           <Flash4></Flash4>
         </Utilities>
         <TargetArmAds>
@@ -264,12 +264,12 @@
               <IRAM>
                 <Type>0</Type>
                 <StartAddress>0x20000000</StartAddress>
-                <Size>0x10000</Size>
+                <Size>0xc000</Size>
               </IRAM>
               <IROM>
                 <Type>1</Type>
                 <StartAddress>0x8000000</StartAddress>
-                <Size>0x80000</Size>
+                <Size>0x40000</Size>
               </IROM>
               <XRAM>
                 <Type>0</Type>
@@ -294,7 +294,7 @@
               <OCR_RVCT4>
                 <Type>1</Type>
                 <StartAddress>0x8000000</StartAddress>
-                <Size>0x10000</Size>
+                <Size>0x40000</Size>
               </OCR_RVCT4>
               <OCR_RVCT5>
                 <Type>1</Type>
@@ -319,7 +319,7 @@
               <OCR_RVCT9>
                 <Type>0</Type>
                 <StartAddress>0x20000000</StartAddress>
-                <Size>0x10000</Size>
+                <Size>0xc000</Size>
               </OCR_RVCT9>
               <OCR_RVCT10>
                 <Type>0</Type>
@@ -344,7 +344,7 @@
             <uThumb>0</uThumb>
             <VariousControls>
               <MiscControls></MiscControls>
-              <Define>USE_STDPERIPH_DRIVER, STM32F10X_HD, USE_STM3210E_EVAL</Define>
+              <Define>USE_STDPERIPH_DRIVER, STM32F10X_HD, USE_STM3210B_EVAL</Define>
               <Undefine></Undefine>
               <IncludePath>..\..\Libraries\CMSIS\CM3\CoreSupport;..\..\Libraries\CMSIS\CM3\DeviceSupport\ST\STM32F10x;..\..\Libraries\STM32F10x_StdPeriph_Driver\inc;..\..\Libraries\STM32_USB-FS-Device_Driver\inc;..\..\uCOS-II\Source;..\..\uCOS-II\Ports\ARM-Cortex-M3\Generic\RealView;..\..\uCOS-II\uC-CPU;..\..\uCOS-II\uC-CPU\ARM-Cortex-M3\RealView;..\..\User\app;..\..\User\bsp</IncludePath>
             </VariousControls>
@@ -465,81 +465,6 @@
               <FileName>app_usbmodbusslave.h</FileName>
               <FileType>5</FileType>
               <FilePath>..\..\User\app\app_usbmodbusslave.h</FilePath>
-            </File>
-            <File>
-              <FileName>app_485modbusslave.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\..\User\app\app_485modbusslave.c</FilePath>
-            </File>
-            <File>
-              <FileName>app_485com.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\..\User\app\app_485com.c</FilePath>
-            </File>
-            <File>
-              <FileName>app_485modbusslave.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\..\User\app\app_485modbusslave.h</FilePath>
-            </File>
-            <File>
-              <FileName>app_485com.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\..\User\app\app_485com.h</FilePath>
-            </File>
-            <File>
-              <FileName>app_basicdef.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\..\User\app\app_basicdef.c</FilePath>
-            </File>
-            <File>
-              <FileName>app_OutControl.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\..\User\app\app_OutControl.c</FilePath>
-            </File>
-            <File>
-              <FileName>app_pid.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\..\User\app\app_pid.c</FilePath>
-            </File>
-            <File>
-              <FileName>app_action.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\..\User\app\app_action.c</FilePath>
-            </File>
-            <File>
-              <FileName>app_inout.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\..\User\app\app_inout.c</FilePath>
-            </File>
-            <File>
-              <FileName>app_Port.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\..\User\app\app_Port.c</FilePath>
-            </File>
-            <File>
-              <FileName>app_PidOut.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\..\User\app\app_PidOut.c</FilePath>
-            </File>
-            <File>
-              <FileName>app_Port.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\..\User\app\app_Port.h</FilePath>
-            </File>
-            <File>
-              <FileName>app_PidOut.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\..\User\app\app_PidOut.h</FilePath>
-            </File>
-            <File>
-              <FileName>app_encryption.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\..\User\app\app_encryption.c</FilePath>
-            </File>
-            <File>
-              <FileName>app_encryption.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\..\User\app\app_encryption.h</FilePath>
             </File>
           </Files>
         </Group>
@@ -677,11 +602,6 @@
               <FilePath>..\..\User\bsp\bsp_sonic.h</FilePath>
             </File>
             <File>
-              <FileName>bsp_TimesInt.h</FileName>
-              <FileType>5</FileType>
-              <FilePath>..\..\User\bsp\bsp_TimesInt.h</FilePath>
-            </File>
-            <File>
               <FileName>stm32f10x_encoder.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\..\User\bsp\stm32f10x_encoder.c</FilePath>
@@ -710,11 +630,6 @@
               <FileName>bsp_sonic.c</FileName>
               <FileType>1</FileType>
               <FilePath>..\..\User\bsp\bsp_sonic.c</FilePath>
-            </File>
-            <File>
-              <FileName>bsp_TimesInt.c</FileName>
-              <FileType>1</FileType>
-              <FilePath>..\..\User\bsp\bsp_TimesInt.c</FilePath>
             </File>
             <File>
               <FileName>bsp_extsram.c</FileName>
